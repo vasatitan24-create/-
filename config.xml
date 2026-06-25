@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.securep2p.chat" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>SecureChat</name>
+    <description>Защищенный P2P Мессенджер</description>
+    <author>Developer</author>
+    
+    <content src="index.html" />
+    
+    <access origin="*" />
+    <allow-navigation href="*" />
+    <allow-intent href="*" />
+
+    <platform name="android">
+        <preference name="AndroidXEnabled" value="true" />
+        <!-- Разрешаем приложению доступ к камере и микрофону телефона -->
+        <config-file target="AndroidManifest.xml" parent="/*">
+            <uses-permission android:name="android.permission.CAMERA" />
+            <uses-permission android:name="android.permission.RECORD_AUDIO" />
+            <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+        </config-file>
+    </platform>
+</widget>
