@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Chat</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #e5ddd5; margin: 0; padding: 10px; }
+        .container { max-width: 550px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; }
+        .header { background-color: #075e54; color: white; padding: 15px; text-align: center; }
+        .header h2 { margin: 0; font-size: 18px; }
+        .status { font-size: 12px; color: #dcf8c6; margin-top: 5px; }
+        .setup-area { padding: 15px; background: #f8f9fa; border-bottom: 1px solid #ddd; }
+        label { font-size: 11px; font-weight: bold; color: #333; display: block; margin-bottom: 5px; text-transform: uppercase; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+        button { width: 100%; padding: 12px; background-color: #128c7e; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px; margin-bottom: 5px; }
+        button:hover { background-color: #075e54; }
+        button.gray { background-color: #6c757d; }
+        #videoArea { display: none; background-color: #000; padding: 10px; gap: 10px; justify-content: center; }
+        video { width: 48%; border-radius: 6px; background-color: #222; }
+        #chatArea { display: none; }
+        #messages { height: 250px; overflow-y: scroll; padding: 15px; background-color: #ece5dd; display: flex; flex-direction: column; gap: 8px; }
+        .msg { max-width: 80%; padding: 8px 12px; border-radius: 8px; font-size: 14px; line-height: 1.4; word-wrap: break-word; }
+        .msg.sent { background-color: #dcf8c6; align-self: flex-end; border-top-right-radius: 0; }
+        .msg.received { background-color: #ffffff; align-self: flex-start; border-top-left-radius: 0; }
+        .msg.system { background-color: #fff3cd; align-self: center; text-align: center; font-size: 11px; color: #555; max-width: 90%; }
+        .input-bar { display: flex; gap: 10px; padding: 10px; background: white; border-top: 1px solid #ddd; }
+        .input-bar input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; margin-bottom: 0; }
+        .input-bar button { width: 100px; margin-bottom: 0; }
+        .verify-box { background-color: #e3f2fd; border: 1px solid #90caf9; color: #0d47a1; padding: 6px; border-radius: 6px; font-size: 11px; text-align: center; font-weight: bold; margin: 10px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h2>P2P Чат + Видео и Файлы</h2>
+        <div class="status" id="status">Инициализация сети...</div>
+    </div>
+    <div id="videoArea">
+        <video id="localVideo" autoplay muted playsinline></video>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+    <div class="setup-area" id="setupArea">
+        <label>Ваш ID для подключения:</label>
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+            <input type="text" id="myId" readonly style="background-color: #e9ecef; margin-bottom:0;">
+            <button onclick="copyMyId()" style="width: 80px; padding: 10px; font-size: 12px; margin-bottom:0;">Копия</button>
+        </div>
+        <label>Пароль шифрования (общий):</label>
+        <input type="password" id="password" placeholder="Введите общий пароль...">
+        <label>Подключение по ID:</label>
+        <input type="text" id="remoteId" placeholder="Вставьте ID собеседника...">
+        <button onclick="connectToPeer()">Установить связь (Чат)</button>
+    </div>
+    <div id="chatArea">
+        <div style="display: flex; gap: 5px; padding: 10px; background: #f8f9fa; border-bottom: 1px solid #ddd;">
+            <button onclick="startCamera()" class="gray">Включить камеру</button>
+            <button onclick="makeCall()">Позвонить</button>
+        </div>
+        <div class="verify-box" id="verifyBox" style="display: none;">
+            Код безопасности канала: <span id="safetyCode" style="color:#d32f2f">--- - ---</span>
+        </div>
+        <div id="messages"></div>
+        <div class="input-bar" style="border-top: none; padding-bottom: 0;">
+            <input type="file" id="fileInput" style="font-size: 12px; flex: 1;">
+            <button onclick="sendFile()" class="gray" style="width: 100px;">Файл</button>
+        </div>
+        <div class="input-bar">
+            <input type="text" id="messageInput" placeholder="Напишите сообщение...">
+            <button onclick="sendMessage()">Отправить</button>
+        </div>
+    </div>
+</div>
+<script>
+let peer = null, conn = null, cryptoKey = null, localStream = null, currentCall = null;
+async function deriveKey(password) {
+    const enc = new TextEncoder();
+    const hash = await window.crypto.subtle.digest("SHA-256", enc.encode(password));
+    return window.crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+async function encryptData(arrayBuffer, key) {
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, arrayBuffer);
+    const payload = new Uint8Array(iv.byteLength + encrypted.byteLength);
+    payload.set(iv, 0); payload.set(new Uint8Array(encrypted), iv.byteLength);
+    return payload;
+}
+async function decryptData(payloadBuffer, key) {
+    const bytes = new Uint8Array(payloadBuffer), iv = bytes.slice(0, 12), encrypted = bytes.slice(12);
+    return await window.crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, encrypted);
+}
+function copyMyId() {
+    const input = document.getElementById('myId'); input.select();
+    navigator.clipboard.writeText(input.value); alert('Ваш ID скопирован!');
+}
+function initPeer() {
+    peer = new Peer();
+    peer.on('open', (id) => {
+        document.getElementById('myId').value = id;
+        document.getElementById('status').textContent = 'Статус: Готов к подключению';
+    });
+    peer.on('connection', (connection) => { conn = connection; setupConnection(); });
+    peer.on('call', async (call) => {
+        if (!localStream) {
+            if (confirm("Вам звонят. Ответить с видео?")) {
+                await startCamera(); call.answer(localStream); handleCall(call);
+            } else { call.close(); }
+        } else { call.answer(localStream); handleCall(call); }
+    });
+    peer.on('error', (err) => { alert('Ошибка сети PeerJS: ' + err.message); });
+}
+function connectToPeer() {
+    const remoteId = document.getElementById('remoteId').value.trim();
+    const password = document.getElementById('password').value.trim();
+    if (!remoteId || !password) return alert('Заполните ID собеседника и пароль шифрования!');
+    document.getElementById('status').textContent = 'Установка соединения...';
+    conn = peer.connect(remoteId); setupConnection();
+}
+async function setupConnection() {
+    conn.on('open', async () => {
+        document.getElementById('status').textContent = 'Статус: Подключено!';
+        document.getElementById('chatArea').style.display = 'block';
+        document.getElementById('setupArea').style.display = 'none';
+        const password = document.getElementById('password').value.trim();
+        cryptoKey = await deriveKey(password);
+        const rawKey = await window.crypto.subtle.exportKey("raw", cryptoKey);
+        const hashBuffer = await window.crypto.subtle.digest("SHA-256", rawKey);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const s1 = String(hashArray[0] % 1000).padStart(3, '0'), s2 = String(hashArray[1] % 1000).padStart(3, '0');
+        document.getElementById('verifyBox').style.display = 'block';
+        document.getElementById('safetyCode').textContent = `${s1} - ${s2}`;
+        appendMessage("Канал чата открыт. Все данные шифруются локально.", "system");
+    });
+    conn.on('data', async (packet) => {
+        if (packet.type === 'text') {
+            try {
+                const encryptedBuf = base64ToArrayBuffer(packet.data), decryptedBuf = await decryptData(encryptedBuf, cryptoKey);
+                appendMessage(new TextDecoder().decode(decryptedBuf), 'received');
+            } catch (e) { appendMessage("[Ошибка дешифрации сообщения]", 'received'); }
+        } else if (packet.type === 'file') {
+            try {
+                appendMessage(`Получен файл: ${packet.name}. Расшифровка...`, 'system');
+                const decryptedBuf = await decryptData(packet.data, cryptoKey);
+                const blob = new Blob([decryptedBuf], { type: packet.mime }), url = URL.createObjectURL(blob);
+                const messagesDiv = document.getElementById('messages'), msg = document.createElement('div');
+                msg.className = 'msg received';
+                const link = document.createElement('a'); link.href = url; link.download = packet.name;
+                link.textContent = `📎 Скачать файл: ${packet.name}`;
+                link.style.color = '#0056b3'; link.style.fontWeight = 'bold';
+                msg.appendChild(link); messagesDiv.appendChild(msg); messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            } catch (e) { appendMessage(`Ошибка дешифрации файла: ${packet.name}`, 'system'); }
+        }
+    });
+    conn.on('close', () => {
+        document.getElementById('status').textContent = 'Статус: Отключено';
+        document.getElementById('chatArea').style.display = 'none';
+        document.getElementById('setupArea').style.display = 'block';
+    });
+}
+async function startCamera() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('localVideo').srcObject = localStream;
+        document.getElementById('videoArea').style.display = 'flex';
+    } catch (e) { alert("Доступ к камере заблокирован. Запускайте по HTTPS!"); }
+}
+function makeCall() {
+    const remoteId = document.getElementById('remoteId').value.trim();
+    if (!localStream) return alert("Сначала нажмите 'Включить камеру'!");
+    const call = peer.call(remoteId, localStream); handleCall(call);
+}
+function handleCall(call) {
+    currentCall = call;
+    call.on('stream', (remoteStream) => {
+        document.getElementById('remoteVideo').srcObject = remoteStream;
+        document.getElementById('videoArea').style.display = 'flex';
+        document.getElementById('status').textContent = 'Статус: Идет звонок';
+    });
+    call.on('close', () => {
+        document.getElementById('videoArea').style.display = 'none';
+        document.getElementById('status').textContent = 'Статус: Подключено';
+    });
+}
+async function sendMessage() {
+    const input = document.getElementById('messageInput'), text = input.value.trim();
+    if (!text || !conn) return;
+    try {
+        const textBytes = new TextEncoder().encode(text), encrypted = await encryptData(textBytes, cryptoKey);
+        conn.send({ type: 'text', data: arrayBufferToBase64(encrypted.buffer) });
+        appendMessage(text, 'sent'); input.value = '';
+    } catch (e) { alert('Ошибка шифрования: ' + e.message); }
+}
+async function sendFile() {
+    const fileInput = document.getElementById('fileInput'), file = fileInput.files[0];
+    if (!file || !conn) return alert("Выберите файл или проверьте соединение.");
+    appendMessage(`Шифрование и отправка: ${file.name}...`, 'system');
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const encryptedData = await encryptData(e.target.result, cryptoKey);
+            conn.send({ type: 'file', name: file.name, mime: file.type, data: encryptedData });
+            appendMessage(`Файл ${file.name} отправлен.`, 'sent'); fileInput.value = '';
+        } catch (err) { alert("Ошибка шифрования файла: " + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+}
+function appendMessage(text, side) {
+    const messagesDiv = document.getElementById('messages'), msg = document.createElement('div');
+    msg.className = `msg ${side}`; msg.textContent = text;
+    messagesDiv.appendChild(msg); messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+function arrayBufferToBase64(buffer) {
+    let binary = ''; const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return window.btoa(binary);
+}
+function base64ToArrayBuffer(base64) {
+    const binary_string = window.atob(base64), bytes = new Uint8Array(binary_string.length);
+    for (let i = 0; i < binary_string.length; i++) bytes[i] = binary_string.charCodeAt(i);
+    return bytes.buffer;
+}
+initPeer();
+</script>
+</body>
+</html>
