@@ -1,0 +1,49 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ] # Запуск сборки при каждом обновлении кода
+  workflow_dispatch: # Добавляет кнопку ручного запуска в меню
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup Java JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Install Cordova CLI
+      run: npm install -g cordova
+
+    - name: Create Cordova Project & Build
+      run: |
+        # Создаем временный проект
+        cordova create build_dir com.securep2p.chat SecureChat
+        rm -rf build_dir/www/*
+        
+        # Копируем ваши файлы в проект
+        cp index.html build_dir/www/index.html
+        cp config.xml build_dir/config.xml
+        
+        # Собираем Android-приложение (отладочную DEBUG-версию)
+        cd build_dir
+        cordova platform add android
+        cordova build android
+
+    - name: Upload Finished APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: secure-chat-apk
+        path: build_dir/platforms/android/app/build/outputs/apk/debug/app-debug.apk
